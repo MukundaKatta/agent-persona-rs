@@ -1,0 +1,12 @@
+[package]
+name = "agent-persona"
+version = "0.1.0"
+edition = "2021"
+description = "Define and apply personas for LLM agent system prompts"
+license = "MIT"
+repository = "https://github.com/MukundaKatta/agent-persona-rs"
+keywords = ["llm", "agent", "persona", "system-prompt", "character"]
+categories = ["development-tools"]
+exclude = ["target/*", ".github/*", "*.log"]
+
+[dependencies]
