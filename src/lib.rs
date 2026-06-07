@@ -1,72 +1,121 @@
-/*!
-agent-persona: define and apply personas for LLM agent system prompts.
-
-```rust
-use agent_persona::{Persona, PersonaBuilder};
-
-let p = PersonaBuilder::new("Alice")
-    .role("technical writer")
-    .tone("concise and clear")
-    .instruction("always use code examples")
-    .build();
-let prompt = p.system_prompt();
-assert!(prompt.contains("Alice"));
-assert!(prompt.contains("technical writer"));
-```
-*/
+//! `agent-persona`: define and apply personas for LLM agent system prompts.
+//!
+//! This crate provides a small, dependency-free way to describe an agent's
+//! persona — its name, role, tone, instructions, constraints, and few-shot
+//! examples — and render it into a deterministic system-prompt string suitable
+//! for passing to an LLM.
+//!
+//! # Example
+//!
+//! ```rust
+//! use agent_persona::PersonaBuilder;
+//!
+//! let p = PersonaBuilder::new("Alice")
+//!     .role("technical writer")
+//!     .tone("concise and clear")
+//!     .instruction("always use code examples")
+//!     .build();
+//!
+//! let prompt = p.system_prompt();
+//! assert!(prompt.contains("Alice"));
+//! assert!(prompt.contains("technical writer"));
+//! ```
 
 /// A persona definition for an LLM agent.
-#[derive(Debug, Clone)]
+///
+/// Construct one with [`PersonaBuilder`], then call [`Persona::system_prompt`]
+/// to render it into a system-prompt string. All fields are public so a
+/// `Persona` can also be assembled directly when convenient.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Persona {
+    /// The agent's name (e.g. `"Alice"`).
     pub name: String,
+    /// An optional role description (e.g. `"technical writer"`).
     pub role: Option<String>,
+    /// An optional tone description (e.g. `"concise and clear"`).
     pub tone: Option<String>,
+    /// Free-form instructions the agent should follow.
     pub instructions: Vec<String>,
+    /// Hard constraints the agent must respect.
     pub constraints: Vec<String>,
+    /// Few-shot examples illustrating desired behavior.
     pub examples: Vec<String>,
 }
 
 impl Persona {
-    /// Build a system prompt string from this persona.
+    /// Build a system-prompt string from this persona.
+    ///
+    /// The output is deterministic: sections always appear in the order
+    /// name/role, tone, instructions, constraints, examples. Empty sections are
+    /// omitted entirely (no dangling headers). When a role is present, the
+    /// indefinite article (`a`/`an`) is chosen based on the role's first
+    /// letter.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use agent_persona::PersonaBuilder;
+    ///
+    /// let p = PersonaBuilder::new("Ada").role("engineer").build();
+    /// assert_eq!(p.system_prompt(), "You are Ada, an engineer.");
+    /// ```
     pub fn system_prompt(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
 
-        // Name and role
-        match (&self.role, &self.name) {
-            (Some(role), name) => parts.push(format!("You are {}, a {}.", name, role)),
-            (None, name) => parts.push(format!("You are {}.", name)),
+        // Name and role.
+        match &self.role {
+            Some(role) => parts.push(format!(
+                "You are {}, {} {}.",
+                self.name,
+                indefinite_article(role),
+                role
+            )),
+            None => parts.push(format!("You are {}.", self.name)),
         }
 
         if let Some(tone) = &self.tone {
             parts.push(format!("Your tone is {}.", tone));
         }
 
-        if !self.instructions.is_empty() {
-            parts.push("Instructions:".to_string());
-            for inst in &self.instructions {
-                parts.push(format!("- {}", inst));
-            }
-        }
-
-        if !self.constraints.is_empty() {
-            parts.push("Constraints:".to_string());
-            for c in &self.constraints {
-                parts.push(format!("- {}", c));
-            }
-        }
-
-        if !self.examples.is_empty() {
-            parts.push("Examples:".to_string());
-            for ex in &self.examples {
-                parts.push(format!("- {}", ex));
-            }
-        }
+        push_section(&mut parts, "Instructions:", &self.instructions);
+        push_section(&mut parts, "Constraints:", &self.constraints);
+        push_section(&mut parts, "Examples:", &self.examples);
 
         parts.join("\n")
     }
 }
 
-/// Builder for constructing a Persona.
+/// Append a `header` followed by one `- item` line per entry, but only if
+/// `items` is non-empty.
+fn push_section(parts: &mut Vec<String>, header: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+    parts.push(header.to_string());
+    for item in items {
+        parts.push(format!("- {}", item));
+    }
+}
+
+/// Choose the indefinite article (`"a"` or `"an"`) for the given word based on
+/// its first alphabetic character. This is a simple heuristic on the leading
+/// letter, not full phonetic analysis (e.g. it returns `"a"` for `"hour"`).
+fn indefinite_article(word: &str) -> &'static str {
+    match word
+        .chars()
+        .find(|c| c.is_alphabetic())
+        .map(|c| c.to_ascii_lowercase())
+    {
+        Some('a') | Some('e') | Some('i') | Some('o') | Some('u') => "an",
+        _ => "a",
+    }
+}
+
+/// Builder for constructing a [`Persona`].
+///
+/// Every setter takes ownership of `self` and returns it, so calls can be
+/// chained fluently and terminated with [`PersonaBuilder::build`].
+#[derive(Debug, Clone)]
 pub struct PersonaBuilder {
     name: String,
     role: Option<String>,
@@ -77,18 +126,59 @@ pub struct PersonaBuilder {
 }
 
 impl PersonaBuilder {
+    /// Start building a persona with the given `name`.
     pub fn new(name: &str) -> Self {
-        Self { name: name.to_string(), role: None, tone: None, instructions: Vec::new(), constraints: Vec::new(), examples: Vec::new() }
+        Self {
+            name: name.to_string(),
+            role: None,
+            tone: None,
+            instructions: Vec::new(),
+            constraints: Vec::new(),
+            examples: Vec::new(),
+        }
     }
 
-    pub fn role(mut self, role: &str) -> Self { self.role = Some(role.to_string()); self }
-    pub fn tone(mut self, tone: &str) -> Self { self.tone = Some(tone.to_string()); self }
-    pub fn instruction(mut self, inst: &str) -> Self { self.instructions.push(inst.to_string()); self }
-    pub fn constraint(mut self, c: &str) -> Self { self.constraints.push(c.to_string()); self }
-    pub fn example(mut self, ex: &str) -> Self { self.examples.push(ex.to_string()); self }
+    /// Set the agent's role (overwrites any previously set role).
+    pub fn role(mut self, role: &str) -> Self {
+        self.role = Some(role.to_string());
+        self
+    }
 
+    /// Set the agent's tone (overwrites any previously set tone).
+    pub fn tone(mut self, tone: &str) -> Self {
+        self.tone = Some(tone.to_string());
+        self
+    }
+
+    /// Append a single instruction. Call multiple times to add several;
+    /// order is preserved.
+    pub fn instruction(mut self, inst: &str) -> Self {
+        self.instructions.push(inst.to_string());
+        self
+    }
+
+    /// Append a single constraint. Order is preserved.
+    pub fn constraint(mut self, c: &str) -> Self {
+        self.constraints.push(c.to_string());
+        self
+    }
+
+    /// Append a single few-shot example. Order is preserved.
+    pub fn example(mut self, ex: &str) -> Self {
+        self.examples.push(ex.to_string());
+        self
+    }
+
+    /// Finalize the builder into a [`Persona`].
     pub fn build(self) -> Persona {
-        Persona { name: self.name, role: self.role, tone: self.tone, instructions: self.instructions, constraints: self.constraints, examples: self.examples }
+        Persona {
+            name: self.name,
+            role: self.role,
+            tone: self.tone,
+            instructions: self.instructions,
+            constraints: self.constraints,
+            examples: self.examples,
+        }
     }
 }
 
@@ -120,7 +210,10 @@ mod tests {
 
     #[test]
     fn instructions_in_prompt() {
-        let p = PersonaBuilder::new("Bot").instruction("be concise").instruction("use bullets").build();
+        let p = PersonaBuilder::new("Bot")
+            .instruction("be concise")
+            .instruction("use bullets")
+            .build();
         let s = p.system_prompt();
         assert!(s.contains("be concise"));
         assert!(s.contains("use bullets"));
@@ -128,14 +221,18 @@ mod tests {
 
     #[test]
     fn constraints_in_prompt() {
-        let p = PersonaBuilder::new("Bot").constraint("no profanity").build();
+        let p = PersonaBuilder::new("Bot")
+            .constraint("no profanity")
+            .build();
         let s = p.system_prompt();
         assert!(s.contains("no profanity"));
     }
 
     #[test]
     fn examples_in_prompt() {
-        let p = PersonaBuilder::new("Bot").example("Q: hi. A: hello.").build();
+        let p = PersonaBuilder::new("Bot")
+            .example("Q: hi. A: hello.")
+            .build();
         let s = p.system_prompt();
         assert!(s.contains("Q: hi."));
     }
@@ -167,7 +264,21 @@ mod tests {
     #[test]
     fn with_role_uses_role_format() {
         let p = PersonaBuilder::new("Alice").role("assistant").build();
-        assert!(p.system_prompt().starts_with("You are Alice, a assistant."));
+        assert!(p
+            .system_prompt()
+            .starts_with("You are Alice, an assistant."));
+    }
+
+    #[test]
+    fn consonant_role_uses_a() {
+        let p = PersonaBuilder::new("Bob").role("teacher").build();
+        assert_eq!(p.system_prompt(), "You are Bob, a teacher.");
+    }
+
+    #[test]
+    fn vowel_role_uses_an() {
+        let p = PersonaBuilder::new("Eve").role("editor").build();
+        assert_eq!(p.system_prompt(), "You are Eve, an editor.");
     }
 
     #[test]
@@ -197,5 +308,55 @@ mod tests {
     fn empty_constraints_no_header() {
         let p = PersonaBuilder::new("B").build();
         assert!(!p.system_prompt().contains("Constraints:"));
+    }
+
+    #[test]
+    fn empty_examples_no_header() {
+        let p = PersonaBuilder::new("B").build();
+        assert!(!p.system_prompt().contains("Examples:"));
+    }
+
+    #[test]
+    fn sections_appear_in_canonical_order() {
+        let p = PersonaBuilder::new("Z")
+            .tone("calm")
+            .instruction("do x")
+            .constraint("never y")
+            .example("e")
+            .build();
+        let s = p.system_prompt();
+        let tone = s.find("Your tone").unwrap();
+        let instr = s.find("Instructions:").unwrap();
+        let cons = s.find("Constraints:").unwrap();
+        let ex = s.find("Examples:").unwrap();
+        assert!(tone < instr);
+        assert!(instr < cons);
+        assert!(cons < ex);
+    }
+
+    #[test]
+    fn default_persona_is_empty() {
+        let p = Persona::default();
+        assert_eq!(p.system_prompt(), "You are .");
+        assert!(p.role.is_none());
+        assert!(p.instructions.is_empty());
+    }
+
+    #[test]
+    fn persona_equality() {
+        let a = PersonaBuilder::new("A").role("r").instruction("i").build();
+        let b = PersonaBuilder::new("A").role("r").instruction("i").build();
+        assert_eq!(a, b);
+        let c = PersonaBuilder::new("A").role("r").build();
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn last_role_call_wins() {
+        let p = PersonaBuilder::new("A")
+            .role("first")
+            .role("second")
+            .build();
+        assert_eq!(p.role.as_deref(), Some("second"));
     }
 }
